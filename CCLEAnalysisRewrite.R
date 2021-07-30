@@ -4,10 +4,14 @@
 library(data.table)
 library(car)
 library(tidyverse)
+library(tidyr)
+library(dplyr)
 library(ggplot2)
 library(ggfortify)
 library(ggrepel)
+library(rcompanion)
 library(edgeR)
+
 
 ########## Load Data ##########
 setwd( "/Users/igarrett/Desktop/R Code/ThesisRewrite ")
@@ -25,11 +29,28 @@ CellLineMeta <- fread("./data rewrite/CTRPv2.0_2015_ctd2_ExpandedDataset/v20.met
 CompoundMeta <- fread("./data rewrite/CTRPv2.0_2015_ctd2_ExpandedDataset/v20.meta.per_compound.txt") 
 ExperimentMeta <- fread("./data rewrite/CTRPv2.0_2015_ctd2_ExpandedDataset/v20.meta.per_experiment.txt") 
 
+#Theme for figures
+theme <- theme(panel.background = element_blank(),
+               panel.border=element_rect(color = "black", size = 1, fill=NA),
+               panel.grid.major = element_blank(),
+               panel.grid.minor = element_blank(),
+               strip.background=element_blank(),
+               axis.text.x=element_text(colour="black", size = 15),
+               axis.text.y=element_text(colour="black", size = 15),
+               axis.title.y = element_text(colour = "black", size = 15),
+               axis.title.x = element_text(colour = "black", size = 15),
+               axis.ticks=element_line(colour="black"),
+               plot.margin=unit(c(1,1,1,1),"line"),
+               legend.title = element_blank(),
+               legend.key = element_blank(),
+               plot.title = element_text(face = "bold", hjust = 0.5),
+               legend.background = element_rect(fill=alpha('blue', 0)),
+               legend.text = element_text(size=14))
+
 ########## Create EdgeRdataframe ##########
 MGMTmethylation <- as.data.frame(t(Methylation[grep("MGMT", Methylation$locus_id),]))
 MGMTmethylation <- MGMTmethylation[-c(1,2,3),,drop=FALSE]
 
-#MGMTexpression <- as.data.frame(t(RNAseqcounts[which(RNAseqcounts$Description =="MGMT"),]))
 MGMTexpression <- as.data.frame(t(RNAseqRSEM[which(RNAseqRSEM$gene_id == MGMTgeneID),]))
 MGMTexpression <- MGMTexpression[-c(1,2),,drop=FALSE]
 
@@ -51,6 +72,7 @@ rownames(EdgeRdataframe) <- c(1:nrow(EdgeRdataframe))
 colnames(EdgeRdataframe)[2] <- "MGMTmethylationValues"
 colnames(EdgeRdataframe)[3] <- "MGMTexpressionValues"
 EdgeRdataframe$MGMTexpressionLabels <- NA
+EdgeRdataframe$MGMTmethylationLabels <- NA
 
 EdgeRdataframe$MGMTmethylationValues <- as.numeric(EdgeRdataframe$MGMTmethylationValues)
 EdgeRdataframe$MGMTexpressionValues <- as.numeric(EdgeRdataframe$MGMTexpressionValues)
@@ -109,50 +131,108 @@ EdgeRdataframe <- EdgeRdataframe[grep("CENTRAL_NERVOUS_SYSTEM",EdgeRdataframe$ce
 ########## Label cell lines as high or low MGMT ##########
 ggplot(data = EdgeRdataframe, aes(x = MGMTexpressionValues )) + geom_histogram(binwidth = 3) #200 
 
-median <- median(EdgeRdataframe$MGMTexpressionValues) # 15, 0.12 for RSEM data
-print(median)
+ExpressionMedian <- median(EdgeRdataframe$MGMTexpressionValues, na.rm = TRUE) # 0.12 for RSEM data
+MethylationMedian <- median(EdgeRdataframe$MGMTmethylationValues, na.rm = TRUE) 
 
 for(Row in (1:nrow(EdgeRdataframe)))
 {
-  if (EdgeRdataframe$MGMTexpressionValues[Row] < median) 
+  if(!(is.na(EdgeRdataframe$MGMTexpressionValues[Row])))
   {
-    EdgeRdataframe$MGMTexpressionLabels[Row] = 'low'
+      if (EdgeRdataframe$MGMTexpressionValues[Row] < ExpressionMedian) 
+      {
+          EdgeRdataframe$MGMTexpressionLabels[Row] = 'low'
+      }
+      else
+      {
+          EdgeRdataframe$MGMTexpressionLabels[Row] = 'high'
+      }
   }
-  else
+  
+  if(!(is.na(EdgeRdataframe$MGMTmethylationValues[Row])))
   {
-    EdgeRdataframe$MGMTexpressionLabels[Row] = 'high'
+      if (EdgeRdataframe$MGMTmethylationValues[Row] < MethylationMedian) 
+      {
+         EdgeRdataframe$MGMTmethylationLabels[Row] = 'low'
+      }
+      else
+      {
+         EdgeRdataframe$MGMTmethylationLabels[Row] = 'high'
+      }
   }
 }
 length(which(EdgeRdataframe$MGMTexpressionLabels =='high')) #33 for high, 32 for low
 
-AlkylatingAgents <- c("bendamustine", "chlorambucil", "dacarbazine", "ifosfamide", "Platin", "temozolomide"
-                       ,"cyclophosphamide", "oxaliplatin")
-
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`bendamustine SensitivityAUC`)),], aes(x = `bendamustine SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`chlorambucil SensitivityAUC`)),], aes(x = `chlorambucil SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`dacarbazine SensitivityAUC`)),], aes(x = `dacarbazine SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`ifosfamide SensitivityAUC`)),], aes(x = `ifosfamide SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`Platin SensitivityAUC`)),], aes(x = `Platin SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = `temozolomide SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`cyclophosphamide SensitivityAUC`)),], aes(x = `cyclophosphamide SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`oxaliplatin SensitivityAUC`)),], aes(x = `oxaliplatin SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-
-ModelResults <- data.frame("AlkylatingAgents" = AlkylatingAgents, "AdjustedRSquared" = NA, "Pvalue" = NA)
-SensitivityStartIndex <- 5
-
 #not normally distributed, need non-parametric t test
 shapiro.test(EdgeRdataframe$MGMTexpressionValue) 
+shapiro.test(EdgeRdataframe$MGMTmethylationValue) 
 
-for(Index in 1:length(ModelResults$AlkylatingAgents))
+#MGMT methylation vs. expression Model
+Model <- lm(EdgeRdataframe$MGMTexpressionValues~EdgeRdataframe$MGMTmethylationValues, data = EdgeRdataframe)
+MGMTplotRsquared <- round(summary(Model)$r.squared,3)
+MGMTplotPvalue <- round(summary(Model)$coefficients[2,4],3)
+
+####### MGMT methylation and expression vs. drug sensitivity AUC Models #######
+AlkylatingAgents <- c("Bendamustine", "Chlorambucil", "Dacarbazine", "Ifosfamide", "Platin", "Temozolomide"
+                      ,"Cyclophosphamide", "Oxaliplatin")
+
+ExpressionModelResults <- data.frame("AlkylatingAgents" = AlkylatingAgents, "AdjustedRSquared" = NA,
+                                     "Pvalue" = NA, "LeveneTest" = NA, "WilcoxonTest" = NA, "EffectSize" = NA)
+MethylationModelResults <- data.frame("AlkylatingAgents" = AlkylatingAgents,"AdjustedRSquared" = NA,
+                                      "Pvalue" = NA, "LeveneTest" = NA, "WilcoxonTest" = NA, "EffectSize" = NA)
+
+SensitivityStartIndex <- 6
+
+ReducedExpressionDataframe <- EdgeRdataframe[which(!is.na(EdgeRdataframe$MGMTexpressionLabels)),]
+ReducedMethylationDataframe <- EdgeRdataframe[which(!is.na(EdgeRdataframe$MGMTmethylationLabels)),]
+
+for(Index in 1:length(ExpressionModelResults$AlkylatingAgents))
 {
-  ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe[,Index+SensitivityStartIndex-1])),], aes(x = row.names(EdgeRdataframe[,Index+SensitivityStartIndex-1]), y = MGMTexpressionValues)) + geom_point()
-  Model <- lm(EdgeRdataframe$MGMTexpressionValues~EdgeRdataframe[,Index+SensitivityStartIndex-1], data = EdgeRdataframe)
-  ModelResults$AdjustedRSquared[Index] <- summary(Model)$r.squared
-  ModelResults$Pvalue[Index] <- summary(Model)$coefficients[2,4]
+  ReducedExpressionDataframe <- ReducedExpressionDataframe[which(!is.na(ReducedExpressionDataframe[,Index+SensitivityStartIndex-1])),]
+  ReducedMethylationDataframe <- ReducedMethylationDataframe[which(!is.na(  ReducedMethylationDataframe[,Index+SensitivityStartIndex-1])),]
+  
+  MGMTexpressionFactor <- factor(ReducedExpressionDataframe[,4])
+  MGMTmethylationFactor <- factor(ReducedMethylationDataframe[,5])
+  
+  ExpressionModel <- lm(ReducedExpressionDataframe[,Index+SensitivityStartIndex-1]~MGMTexpressionFactor, data = ReducedExpressionDataframe)
+  ExpressionModelResults$AdjustedRSquared[Index] <- summary(ExpressionModel)$r.squared
+  ExpressionModelResults$Pvalue[Index] <- summary(ExpressionModel)$coefficients[2,4]
+  
+  MethylationModel <- lm(ReducedMethylationDataframe[,Index+SensitivityStartIndex-1]~MGMTmethylationFactor, data = ReducedMethylationDataframe)
+  MethylationModelResults$AdjustedRSquared[Index] <- summary(MethylationModel)$r.squared
+  MethylationModelResults$Pvalue[Index] <- summary(MethylationModel)$coefficients[2,4]
+  
+  #Tests if variance of the samples is the same - needed to perform Mann-Whitney Test  
+  ExpressionModelResults$LeveneTest[Index] <- leveneTest(ReducedExpressionDataframe[,Index+SensitivityStartIndex-1]~MGMTexpressionFactor, data = ReducedExpressionDataframe)$`Pr(>F)`[1]
+  MethylationModelResults$LeveneTest[Index] <- leveneTest(ReducedMethylationDataframe[,Index+SensitivityStartIndex-1]~MGMTmethylationFactor, data = ReducedMethylationDataframe)$`Pr(>F)`[1]
+  
+  # independent 2-group Mann-Whitney Test
+  if( ExpressionModelResults$LeveneTest[Index] > 0.05) #Can perform MW Test
+  {
+    ExpressionModelResults$WilcoxonTest[Index] <- wilcox.test(ReducedExpressionDataframe[,Index+SensitivityStartIndex-1]~MGMTexpressionFactor)$p.value
+    ExpressionModelResults$EffectSize[Index] <- wilcoxonR(x = ReducedExpressionDataframe[,Index+SensitivityStartIndex-1], g = MGMTexpressionFactor )
+  }
+  
+  if( MethylationModelResults$LeveneTest[Index] > 0.05) #Can perform MW Test
+  {
+    MethylationModelResults$WilcoxonTest[Index] <- wilcox.test(ReducedMethylationDataframe[,Index+SensitivityStartIndex-1]~MGMTmethylationFactor)$p.value
+    MethylationModelResults$EffectSize[Index] <-wilcoxonR(x = ReducedMethylationDataframe[,Index+SensitivityStartIndex-1], g = MGMTmethylationFactor )
+  }
 }
 
+#MGMT vs. TMZ AUC
+MGMTsensitivityTheme <- theme + 
+  theme(panel.grid.major = element_line(colour = "azure3", size = 0.5)) +
+  theme(panel.grid.minor = element_line(colour="azure3", size=0.5))
+
+MGMTsensitivityPlot <- ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = MGMTexpressionLabels, y = `temozolomide SensitivityAUC`)) + 
+  geom_point() + geom_jitter(width = .4) +
+  annotate("text", label =  sprintf("paste(p, \" = %s\")",round(ExpressionModelResults$WilcoxonTest[match("Temozolomide",ExpressionModelResults$AlkylatingAgents)],2)), x = "low", y = 16.9, hjust = -1.3, vjust = 1,  parse = TRUE)+
+  annotate("text", label =  sprintf("paste(d, \" = %s\")",round(ExpressionModelResults$EffectSize[match("Temozolomide",ExpressionModelResults$AlkylatingAgents)],2)), x = "low", y = 16.7, hjust = -1.2, vjust = 1,  parse = TRUE)
+print(MGMTsensitivityPlot +
+        ggtitle("MGMT Expression vs. TMZ Drug Sensitivity")+
+        labs(y="TMZ Sensitivity (AUC)", x = "MGMT Gene Expression") + MGMTsensitivityTheme)
+
 ########## Label cell lines as high/low sensitivity for alkylating agents ##########
-ggplot(data = EdgeRdataframe, aes(x = `chlorambucil SensitivityAUC`)) + geom_histogram(binwidth = .3) 
 GroupNumber <- 8
 
 for(Col in (SensitivityStartIndex:ncol(EdgeRdataframe)))
@@ -179,76 +259,61 @@ for(Col in (SensitivityStartIndex:ncol(EdgeRdataframe)))
   }
 }
 
-ggplot(data = EdgeRdataframe, aes(x = MGMTmethylationValues, y = MGMTexpressionValues)) + geom_point()
+# MGMT methylation vs MGMT expression 
+MGMTPlot <- ggplot(data = EdgeRdataframe, aes(x = MGMTmethylationValues, y = MGMTexpressionValues)) +
+            annotate("text", x = 0.92, y = 19,
+                     label = sprintf("paste(p, \" = %s\")",MGMTplotPvalue), parse = TRUE) +
+            annotate("text", x = 0.92, y = 21,
+                      label = sprintf("paste(R ^ 2, \" = %s\")",MGMTplotRsquared), parse = TRUE) +
+            geom_point() + theme
+print(MGMTPlot + 
+        ggtitle("MGMT Methylation vs. Expression")+
+        labs(y="MGMT Gene Expression (TPM)", x = "MGMT Gene Methylation")) + theme
 
-ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`Platin SensitivityAUC`)),], aes(x = `Platin SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-#ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe[,5])),], aes(x = EdgeRdataframe[,5], y = MGMTexpressionValues)) + geom_point()
+######## Heatmap for MGMT T Tests ########
+MGMTdata <- c("Expression", "Methylation")
+Order <- c("Oxaliplatin","Platin","Dacarbazine", "Temozolomide", "Cyclophosphamide", 
+                              "Ifosfamide", "Chlorambucil", "Bendamustine")
+MGMTHeatmap <- expand.grid(MGMTdata =  MGMTdata, AlkylatingAgents = Order)
+MGMTHeatmap <- MGMTHeatmap[order(MGMTHeatmap$MGMTdata),]
 
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`bendamustine SensitivityAUC`)),], aes(x = `bendamustine SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`chlorambucil SensitivityAUC`)),], aes(x = `chlorambucil SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`dacarbazine SensitivityAUC`)),], aes(x = `dacarbazine SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`ifosfamide SensitivityAUC`)),], aes(x = `ifosfamide SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`Platin SensitivityAUC`)),], aes(x = `Platin SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = `temozolomide SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`cyclophosphamide SensitivityAUC`)),], aes(x = `cyclophosphamide SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
-# ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`oxaliplatin SensitivityAUC`)),], aes(x = `oxaliplatin SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
+OrderedExpressionData <- ExpressionModelResults %>% slice(match(Order, AlkylatingAgents))
+OrderedMethylationData <- MethylationModelResults %>% slice(match(Order, AlkylatingAgents))
+AllEffectSizes <-c(OrderedExpressionData$EffectSize,OrderedMethylationData$EffectSize)
+MGMTHeatmap$EffectSize <- AllEffectSizes
 
-ModelResults$LeveneTest <- NA
-ModelResults$WilcoxonTest <- NA
-ModelResults$KWTest <- NA
+AllPvalues <-c(OrderedExpressionData$Pvalue,OrderedMethylationData$Pvalue)
+MGMTHeatmap$Pvalue <- AllPvalues
+MGMTHeatmap$Stars <- NA
 
-for(Index in 1:length(ModelResults$AlkylatingAgents))
+for(Index in 1:nrow(MGMTHeatmap))
 {
-  ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe[,Index+SensitivityStartIndex-1])),], aes(x = row.names(EdgeRdataframe[,Index+SensitivityStartIndex-1]), y = MGMTexpressionValues)) + geom_point()
-  
-  #Tests if variance of the samples is the same - needed to perform Mann-Whitney Test  
-  SensitivityLabels <- factor(EdgeRdataframe[,Index+SensitivityStartIndex-1])
-  ModelResults$LeveneTest[Index] <- leveneTest(EdgeRdataframe$MGMTexpressionValue~SensitivityLabels, data = EdgeRdataframe)$`Pr(>F)`[1]
-  
-  # independent 2-group Mann-Whitney Test  
-  ModelResults$WilcoxonTest[Index] <- wilcox.test(EdgeRdataframe$MGMTexpressionValue~SensitivityLabels)$p.value
-
-  ModelResults$KWTest[Index]<- kruskal.test(EdgeRdataframe$MGMTexpressionValue~SensitivityLabels, data = EdgeRdataframe)$p.value
+  if(MGMTHeatmap$Pvalue[Index] < 0.001)
+  {
+    MGMTHeatmap$Stars[Index] <- "***"
+  }
+  else if(MGMTHeatmap$Pvalue[Index] < 0.01)
+  {
+    MGMTHeatmap$Stars[Index] <- "**"
+  }
+  else if(MGMTHeatmap$Pvalue[Index] < 0.05)
+  {
+    MGMTHeatmap$Stars[Index] <- "*"
+  }
 }
 
-#ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`chlorambucil SensitivityAUC`)),], aes(x = `chlorambucil SensitivityAUC`, y = MGMTexpressionValues)) + geom_point()
+HeatmapTheme <- theme + theme(panel.border = element_blank()) + theme(axis.ticks = element_blank()) 
+MGMTHeatmapPlot <- ggplot(data = MGMTHeatmap, mapping = aes(x = MGMTdata, 
+                y = AlkylatingAgents, fill = EffectSize)) + 
+                scale_fill_gradient2(low = "brown3", mid="cornsilk1", high="turquoise4")+
+                geom_tile(color = "black") +
+                labs(fill="Effect Size") +
+                geom_text(aes(label = Stars), color = "black", size=5) +
+                HeatmapTheme
 
-
-# MGMT methylation or expression vs TMZ
-ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = MGMTmethylationValues, y = `temozolomide SensitivityAUC`)) + geom_point()
-ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = MGMTexpressionValues, y = `temozolomide SensitivityAUC`)) + geom_point()
-
-#MGMT methylation of cell lines
-ggplot(data = EdgeRdataframe, aes(x = MGMTmethylationValues)) + geom_histogram(binwidth = .1) 
-
-#Graph theme
-theme <- theme(panel.background = element_blank(),
-             panel.border=element_rect(color = "black", size = 1, fill=NA),
-             panel.grid.major = element_blank(),
-             panel.grid.minor = element_blank(),
-             strip.background=element_blank(),
-             axis.text.x=element_text(colour="black", size = 15),
-             axis.text.y=element_text(colour="black", size = 15),
-             axis.title.y = element_text(colour = "black", size = 15),
-             axis.title.x = element_text(colour = "black", size = 15),
-             axis.ticks=element_line(colour="black"),
-             plot.margin=unit(c(1,1,1,1),"line"),
-             legend.title = element_blank(),
-             legend.key = element_blank(),
-             plot.title = element_text(face = "bold", hjust = 0.5),
-             legend.background = element_rect(fill=alpha('blue', 0)),
-             legend.text = element_text(size=14))
-
-MGMTExpressionplot <- ggplot(data = EdgeRdataframe, aes(x = MGMTexpressionValues)) + geom_histogram(binwidth = 2)  + theme #200
-print(MGMTExpressionplot + 
-        ggtitle("Distribution of MGMT Gene Expression Across Glioma Cell Lines")+
-        labs(y="Number of Cell Lines", x = "MGMT Expression (counts)"))
-
-#TMZ sensitivity for the cell lines 
-TMZSensitivityplot <- ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = `temozolomide SensitivityAUC`)) + geom_histogram(stat="count") 
-print(TMZSensitivityplot + 
-        ggtitle("Distribution of TMZ Sensitivity Across Glioma Cell Lines")+
-        labs(y="Number of Cell Lines", x = "TMZ Sensitivity (AUC values)")) + theme
+print(MGMTHeatmapPlot + 
+        ggtitle("Effect Size for Mann-Whitney U Test")+
+        labs(y="", x = "MGMT", fill = "Effect Size")) + HeatmapTheme
 
 #########     Making the Design Matrix    ######### 
 ListofDesignMatricesMGMThigh <- c()

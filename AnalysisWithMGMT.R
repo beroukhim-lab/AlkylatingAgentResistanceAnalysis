@@ -14,7 +14,6 @@ setwd( "/Users/igarrett/Desktop/R Code/ThesisRewrite ")
 #From the CCLE 
 RNAseqcounts <- fread("./data rewrite/CCLE_RNAseq_genes_counts_20180929 (1).gct") 
 RNAseqcountsGlioma <- select(RNAseqcounts, Name, Description, contains("CENTRAL_NERVOUS_SYSTEM"))
-#RNAseqRSEM <- fread("./data rewrite/CCLE_RNAseq_rsem_genes_tpm_20180929.txt") 
 
 #From the CTD^2 Data Portal 
 Sensitivity <- fread("./data rewrite/CTRPv2.0_2015_ctd2_ExpandedDataset/v20.data.curves_post_qc.txt") 
@@ -48,7 +47,6 @@ for(ExperimentID in unique(Sensitivity$experiment_id))
 ########## Filter out Alkylators ##########
 DrugNametoID <- filter(CompoundMeta,grepl("DNA alkylator",target_or_activity_of_compound)) 
 AlkylatorSensitivity <- filter(Sensitivity, master_cpd_id %in% DrugNametoID$master_cpd_id) 
-plot(Sensitivity$conc_pts_fit,Sensitivity$area_under_curve) 
 
 ########## Add Drug Sensitivity to EdgeRdataframe ##########
 for (AlkylatorcpdID in unique(AlkylatorSensitivity$master_cpd_id))
@@ -78,20 +76,19 @@ for (AlkylatorcpdID in unique(AlkylatorSensitivity$master_cpd_id))
 EdgeRdataframe <- EdgeRdataframe[grep("CENTRAL_NERVOUS_SYSTEM",EdgeRdataframe$celllines,fixed=TRUE),]
 
 ########## Label cell lines as high/low sensitivity for alkylating agents ##########
-ggplot(data = EdgeRdataframe, aes(x = `chlorambucil SensitivityAUC`)) + geom_histogram(binwidth = .3) 
 GroupNumber <- 8
 SensitivityStartIndex <- 2
 
 for(Col in (SensitivityStartIndex:ncol(EdgeRdataframe)))
 {
   MedianDrug = median(EdgeRdataframe[, Col], na.rm = TRUE)
-  ###EdgeRdataframe[, Col] <- ntile(EdgeRdataframe[, Col], GroupNumber)
+  EdgeRdataframe[, Col] <- ntile(EdgeRdataframe[, Col], GroupNumber)
   
   for(Row in (1:nrow(EdgeRdataframe)))
   {
     #Ignores cells with NAs and those in the fourth and fifth octiles
-    if (is.na(EdgeRdataframe[Row, Col])) ###|| EdgeRdataframe[Row, Col] == GroupNumber/2
-        ###|| EdgeRdataframe[Row, Col] == GroupNumber/2 + 1)
+    if (is.na(EdgeRdataframe[Row, Col])|| EdgeRdataframe[Row, Col] == GroupNumber/2
+        || EdgeRdataframe[Row, Col] == GroupNumber/2 + 1)
     {
       EdgeRdataframe[Row, Col] = NA
     }
@@ -123,12 +120,6 @@ theme <- theme(panel.background = element_blank(),
                plot.title = element_text(face = "bold", hjust = 0.5),
                legend.background = element_rect(fill=alpha('blue', 0)),
                legend.text = element_text(size=14))
-
-#TMZ sensitivity for the cell lines 
-TMZSensitivityplot <- ggplot(data = EdgeRdataframe[which(!is.na(EdgeRdataframe$`temozolomide SensitivityAUC`)),], aes(x = `temozolomide SensitivityAUC`)) + geom_histogram(stat="count") 
-print(TMZSensitivityplot + 
-        ggtitle("Distribution of TMZ Sensitivity Across Glioma Cell Lines")+
-        labs(y="Number of Cell Lines", x = "TMZ Sensitivity (AUC values)")) + theme
 
 #########     Making the Design Matrix    ######### 
 ListofDesignMatrices <- c()
@@ -212,26 +203,44 @@ for(DesignMatrixIndex in 1:length(ListofDesignMatrices))
   lrt$table$diffexpressed <- "No difference"
   lrt$table$FDR <- NA
   lrt$table$FDR <- p.adjust(lrt$table$PValue,method="BH")
-  lrt$table$diffexpressed[lrt$table$logFC > 1 & lrt$table$FDR < 0.001] <- "Up for resistant"
-  lrt$table$diffexpressed[lrt$table$logFC < -1 & lrt$table$FDR < 0.001] <- "Down for resistant"
+  lrt$table$diffexpressed[lrt$table$logFC > 1 & lrt$table$FDR < 0.01] <- "Up for resistant"
+  lrt$table$diffexpressed[lrt$table$logFC < -1 & lrt$table$FDR < 0.01] <- "Down for resistant"
   
   mycolors <- c("blue", "red", "black")
   names(mycolors) <- c("Down for resistant", "Up for resistant", "No difference")
   
   lrt$table$delabel <- NA
   lrt$table$delabel[lrt$table$diffexpressed != "No difference"] <- lrt$genes$Description[lrt$table$diffexpressed != "No difference"]
-  LastGene <- length(which(lrt$table$diffexpressed=="Down for resistant"))+length(which(lrt$table$diffexpressed=="Up for resistant"))
-  Pvalue <- ((lrt$table[order(lrt$table$FDR), ][LastGene,4])+(lrt$table[order(lrt$table$FDR), ][LastGene+1,4]))/2
+
+  lrt$table <- lrt$table[order(lrt$table$FDR),]
+  MostSignificantFDR <- head(lrt$table[order(lrt$table$FDR),],10)
+  MostSignificantGeneNames <- data.frame("delabel" = NA)
   
+  Index <- 1
+  for (Gene in lrt$table$delabel)
+  {
+    if(is.na(Gene) || !(Gene %in% MostSignificantFDR$delabel))
+    {
+      MostSignificantGeneNames[Index,1] <- NA
+      
+    }
+    else
+    {
+      MostSignificantGeneNames[Index,1] <- Gene
+    }
+    Index <- Index + 1
+  }
+  
+
   volplot <- ggplot(data=lrt$table, mapping = aes(x=logFC, y=-log10(PValue), col=diffexpressed)) +
     geom_point() +
-    theme_minimal() +
-    geom_text_repel(aes(label = lrt$table$delabel), size = 3,
+    theme + 
+    geom_text_repel(aes(label = MostSignificantGeneNames$delabel), size = 3,
                     max.overlaps=Inf,
                     show.legend  = F) +
-    geom_hline(yintercept=-log10(Pvalue), col="red") +
     scale_colour_manual(values = mycolors) +
-    labs(title=sprintf("Differentially expressed genes for %s",names(ListofDesignMatrices)[DesignMatrixIndex]))
+    labs(title=sprintf("Differentially expressed genes for %s",names(ListofDesignMatrices)[DesignMatrixIndex]),
+         y = expression("-log"[10]~"(P Value)"))
   ggsave(paste0(sprintf("Differentially expressed genes for %s",names(ListofDesignMatrices)[DesignMatrixIndex]),".png"))
   
   #Plot 4: PCA
