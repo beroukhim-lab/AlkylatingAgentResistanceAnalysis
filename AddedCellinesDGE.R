@@ -9,6 +9,9 @@ library(ggrepel)
 library(edgeR)
 library(tools)
 library(DESeq2)
+library(ggpubr)
+library(edgeR)
+library(statmod)
 
 directory <- "/Volumes/xchip_beroukhimlab" #personal computer
 #directory <-"/xchip/beroukhimlab" #server
@@ -162,6 +165,7 @@ dataCheck(ctd2Dataframe, "ctd2")
 
 filterLowVariance <- function(dataframe, dataframeName)
 {
+  dataframe <- prismDataframe
   Mean <- apply(dataframe[,-1], 2, function(x){mean(x, na.rm = TRUE)})
   Variation <- apply(dataframe[,-1], 2, function(x){var(x, na.rm = TRUE)})
   CelllineNum <- apply(dataframe[,-1], 2, function(x){sum(!is.na(x))})
@@ -231,9 +235,9 @@ secondaryScreenCelllineInfo <- subset(secondaryScreenCelllineInfo, !is.na(second
 secondaryScreenCelllineInfo <- secondaryScreenCelllineInfo[secondaryScreenCelllineInfo$passed_str_profiling == T,]
 
 #Still duplicated celllines?
-View(subset(secondaryScreenCelllineInfo, duplicated(depmap_id))) #95 entries
-View(secondaryScreenCelllineInfo[secondaryScreenCelllineInfo$depmap_id == "ACH-000096",])
-View(secondaryScreenCelllineInfo[secondaryScreenCelllineInfo$depmap_id == "ACH-000082",])
+#View(subset(secondaryScreenCelllineInfo, duplicated(depmap_id))) #95 entries
+#View(secondaryScreenCelllineInfo[secondaryScreenCelllineInfo$depmap_id == "ACH-000096",])
+#View(secondaryScreenCelllineInfo[secondaryScreenCelllineInfo$depmap_id == "ACH-000082",])
 #Duplicated entries are exactly the same, can just delete one of the duplicates
 secondaryScreenCelllineInfo <- subset(secondaryScreenCelllineInfo, !duplicated(depmap_id))
 
@@ -265,8 +269,8 @@ filterCounts <- function(Dataframe, ReadCounts)
 } 
 
 prismReadCounts <- filterCounts(prismDataframe, prismReadCounts)
-sangerReadCounts <- filterCounts(sangerDataframe, ccleReadCounts)
-ctd2ReadCounts <- filterCounts(ctd2Dataframe, ccleReadCounts)
+sangerReadCounts <- filterCounts(sangerDataframe, prismReadCounts)
+ctd2ReadCounts <- filterCounts(ctd2Dataframe, prismReadCounts)
 
 prismDataframe <- subset(prismDataframe, prismDataframe$celllines %in%  rownames(prismReadCounts))
 sangerDataframe <- subset(sangerDataframe, sangerDataframe$celllines %in%  rownames(sangerReadCounts))
@@ -274,12 +278,12 @@ ctd2Dataframe <- subset(ctd2Dataframe, ctd2Dataframe$celllines %in%  rownames(ct
 
 ######   Limma DEG Analysis   ######
 
-prismDGList <- DGEList(counts=t(prismReadCounts))
-sangerDGList <- DGEList(counts=t(sangerReadCounts))
-ctd2DGList <- DGEList(counts=t(ctd2ReadCounts))
+# prismDGList <- DGEList(counts=t(prismReadCounts))
+# sangerDGList <- DGEList(counts=t(sangerReadCounts))
+# ctd2DGList <- DGEList(counts=t(ctd2ReadCounts))
 
 #For design process demo
-write.csv(prismDataframe, sprintf('%s/Isobel/CancerResistance/datasets/prismDataframe.csv', directory), row.names = FALSE)
+#write.csv(prismDataframe, sprintf('%s/Isobel/CancerResistance/datasets/prismDataframe.csv', directory), row.names = FALSE)
 
 ##### Create Design Matrix #####
 makeDesignMatrix <- function(Dataframe)
@@ -328,31 +332,51 @@ filterLowCountsLimma <- function(DGList, ReadCounts, ThresholdValue)
   return (calcNormFactors(DGList))
 }
 
-prismDGList <-  filterLowCountsLimma (prismDGList, prismReadCounts, 0.3)
-sangerDGList <- filterLowCountsLimma (sangerDGList, sangerReadCounts, 0.2)
-ctd2DGList <-  filterLowCountsLimma (ctd2DGList, ctd2ReadCounts, 0.2)
-
 #Voom: Using Precision Weights - Useful if library sizes are quite varied
 #Counts close to 0 or/and "beak shape" mean data not properly filtered
-runVoomAnalysis <- function(DesignMatrix, DGList, DatabaseName)
+runVoomAnalysis <- function(DesignMatrix, ReadCounts, DatabaseName)
 {
   for(row in SensitivityStartIndex:ncol(DesignMatrix))#for(row in 1:ncol(DesignMatrix))
   {
-    ReducedDesignMatrix <- na.omit(prismDesignMatrix[,c(1,2), drop = FALSE])#ReducedDesignMatrix <- na.omit(DesignMatrix[,row, drop = FALSE])
-    ReduceddgList <- prismDGList[,which(colnames(prismDGList$counts) %in%  rownames(ReducedDesignMatrix))]
-    v <- voom(ReduceddgList, ReducedDesignMatrix, plot=FALSE)
+    # row <- 6
+    # DesignMatrix <- prismDesignMatrix
+    # ReadCounts <- prismReadCounts
+    
+    ReducedDesignMatrix <- na.omit(DesignMatrix[,c(1,row), drop = FALSE])
+    ReducedReadCounts <- ReadCounts[which(rownames(ReadCounts) %in%  rownames(ReducedDesignMatrix)),]
+    
+    ReduceddgList <- DGEList(counts=t(ReducedReadCounts))
+    #ReduceddgList <- filterLowCountsLimma(ReduceddgList, ReducedReadCounts, 0.2)
+    
+    keep <- filterByExpr(ReduceddgList, ReducedDesignMatrix)
+    ReduceddgList <- ReduceddgList[keep,,keep.lib.sizes=FALSE]
+    ReduceddgList <- calcNormFactors(ReduceddgList)
+    
+    v <- voom(ReduceddgList, ReducedDesignMatrix, plot=F)
+    
     #Fit the linear model - estimates group means and gene variances
-    fit <- lmFit(v,  ReducedDesignMatrix)
+    fit <- lmFit(v,  ReducedDesignMatrix, method = "robust") 
+    #fit <- lmFit(v,  ReducedDesignMatrix) 
+    
     #eBayes - performs empirical Bayes shrinkage on the variances
     #Estimates moderated t-statistics and the associated p-values
-    fit <- eBayes(fit)
+    fit <- eBayes(fit) #fit <- eBayes(fit, robust = T)
     
-    DEGresults <- topTable(fit, coef=ncol(ReducedDesignMatrix)[row], n = Inf) # DEGresults <- topTable(fit, coef=ncol(ReducedDesignMatrix), n = Inf)
+    #topTable(fit, coef = 2, p.value = 0.05)
+    #summary(decideTests(fit))
+    DEGresults <- topTable(fit, 2, n = Inf)#DEGresults <- topTable(fit, coef=ncol(ReducedDesignMatrix), n = Inf)#DEGresults <- topTable(fit, coef=row, n = Inf) 
     colnames(DEGresults)[1] <- "Gene"
     testSummary <- decideTests(fit) 
+    #summary(testSummary)
     
-    AlkylatingAgentName <- unlist(strsplit(colnames(ReducedDesignMatrix)[-1], " "))
-    AlkylatingAgentName <- AlkylatingAgentName[!AlkylatingAgentName %in% "SensitivityAUC"]
+    # #P-value Distribution
+    # ggplot(data = limmaResults, aes(x=P.Value))+ geom_histogram(binwidth=0.01)+
+    #   theme
+    # ggplot(data = DESeqResults, aes(x=Pvalue))+ geom_histogram(binwidth=0.01)+
+    #   theme
+    
+    AlkylatingAgentName <- unlist(strsplit(colnames(ReducedDesignMatrix), " "))#AlkylatingAgentName <- unlist(strsplit(colnames(DesignMatrix), " "))
+    AlkylatingAgentName <-AlkylatingAgentName[!AlkylatingAgentName %in% c("(Intercept)", "SensitivityAUC")]#AlkylatingAgentName <- AlkylatingAgentName[!AlkylatingAgentName %in% "SensitivityAUC"][row]
     
     #Volcano Plot
     DEGresults$diffexpressed <- "No difference"
@@ -365,10 +389,11 @@ runVoomAnalysis <- function(DesignMatrix, DGList, DatabaseName)
     DEGresults$delabel <- NA
     DEGresults$delabel[DEGresults$diffexpressed != "No difference"] <- DEGresults$Gene[DEGresults$diffexpressed != "No difference"]
     
-    TopTen <- topTable(fit, coef=ncol(ReducedDesignMatrix), n = 10)
+    TopTen <- topTable(fit, 2, n = 10, sort.by = "p")#TopTen <- topTable(fit, coef=row, n = 10, sort.by = "p")#TopTen <- topTable(fit, coef=ncol(ReducedDesignMatrix), n = 10)
     TopTen$diffexpressed <- "No difference"
     TopTen$diffexpressed[TopTen$logFC > 1 & TopTen$adj.P.Val < 0.05] <- "Down for resistant"
     TopTen$diffexpressed[TopTen$logFC < -1 & TopTen$adj.P.Val < 0.05] <- "Up for resistant"
+    TopTen <- TopTen[TopTen$diffexpressed != "No difference",]
     
     ggplot(data=DEGresults, mapping = aes(x=logFC, y=-log10(P.Value), col=diffexpressed)) +
       geom_point() +
@@ -387,9 +412,9 @@ runVoomAnalysis <- function(DesignMatrix, DGList, DatabaseName)
   }
 }
 
-runVoomAnalysis(prismDesignMatrix, prismDGList, "PRISM")
-runVoomAnalysis(sangerDesignMatrix, sangerDGList, "sangerGDSC")
-runVoomAnalysis(ctd2DesignMatrix, ctd2DGList, "ctd2")
+runVoomAnalysis(prismDesignMatrix, prismReadCounts, "PRISM")
+runVoomAnalysis(sangerDesignMatrix, sangerReadCounts, "sangerGDSC")
+runVoomAnalysis(ctd2DesignMatrix, ctd2ReadCounts, "ctd2")
 
 ####### logCPM Analysis ######
 filterLowCountsCPM <- function(ReadCounts, ThresholdValue)
@@ -416,10 +441,6 @@ filterLowCountsCPM <- function(ReadCounts, ThresholdValue)
   
 }
 
-prismlogCPM <-  filterLowCountsCPM(prismReadCounts, 0.3)
-sangerlogCPM <- filterLowCountsCPM(sangerReadCounts, 0.2)
-ctd2logCPM <-  filterLowCountsCPM(ctd2ReadCounts, 0.2)
-
 # ###### Normalization Tests #########
 # shapiro.test(logCPM [0:5000])$p.value #Not normally distributed
 # 
@@ -428,17 +449,22 @@ ctd2logCPM <-  filterLowCountsCPM(ctd2ReadCounts, 0.2)
 # ad.test(logCPM)$p.value #Not normally distributed
 # 
 # #Use non-parametric correlation tests
-runCorrelationAnalysis <- function(Dataframe, LogCPM, Type, Exact, DatabaseName)
+runCorrelationAnalysis <- function(Dataframe, ReadCounts, Type, Exact, DatabaseName)
 {
   for(col in SensitivityStartIndex:ncol(Dataframe))
   {
-    #col <- 2
+    # col <- 2
+    # Dataframe <- prismDataframe
+    # Type <- "spearman"
+    # Exact <- T
+    
     SensitivityAUC <- subset(Dataframe,select = c(1,col)) #22-Thiotepa
     SensitivityAUC <- na.omit(SensitivityAUC)
     SensitivityAUC <- SensitivityAUC[order(SensitivityAUC$celllines),]
     
-    ReducedCPM <- subset(LogCPM, rownames(LogCPM) %in%  SensitivityAUC$celllines)
+    ReducedCPM <- subset(ReadCounts, rownames(ReadCounts) %in%  SensitivityAUC$celllines)
     ReducedCPM <- ReducedCPM[order(rownames(ReducedCPM)),]
+    ReducedCPM <- filterLowCountsCPM(ReducedCPM, 0.3)
     
     GeneNames <- c(colnames(ReducedCPM))
     CPMCorrelations <- data.frame("Gene" = GeneNames, "Rvalue" = NA, "Tstatistic" = NA,
@@ -446,6 +472,7 @@ runCorrelationAnalysis <- function(Dataframe, LogCPM, Type, Exact, DatabaseName)
     
     for(row in 1:nrow(CPMCorrelations))
     {
+      #row <- 1
       Gene <- as.character(CPMCorrelations$Gene[row])
       plotDataset <- cbind(subset(SensitivityAUC,select = c(2)), ReducedCPM[,Gene, drop=FALSE]) 
       Result <- cor.test(plotDataset[,1],plotDataset[,2], method = Type, exact = Exact)
@@ -461,7 +488,6 @@ runCorrelationAnalysis <- function(Dataframe, LogCPM, Type, Exact, DatabaseName)
     #Resistant for positive correlation, Sensitive for negative correlation
     OrderedCPMCorrelations$diffexpressed[OrderedCPMCorrelations$Rvalue > 0.5 & OrderedCPMCorrelations$FDR < 0.05] <- "Down for resistant"
     OrderedCPMCorrelations$diffexpressed[OrderedCPMCorrelations$Rvalue < -0.5 & OrderedCPMCorrelations$FDR < 0.05] <- "Up for resistant"
-    
     
     # CPMSignificantResults <- OrderedCPMCorrelations[abs(OrderedCPMCorrelations$Rvalue) > 0.5,]
     
@@ -500,57 +526,73 @@ runCorrelationAnalysis <- function(Dataframe, LogCPM, Type, Exact, DatabaseName)
   }
 }
 
-runCorrelationAnalysis(prismDataframe, prismlogCPM, "pearson", T, "PRISM")
-runCorrelationAnalysis(sangerDataframe, sangerlogCPM, "pearson", T, "sangerGDSC")
-runCorrelationAnalysis(ctd2Dataframe, ctd2logCPM, "pearson", T, "ctd2")
+runCorrelationAnalysis(prismDataframe, prismReadCounts, "pearson", T, "PRISM")
+runCorrelationAnalysis(sangerDataframe, sangerReadCounts, "pearson", T, "sangerGDSC")
+runCorrelationAnalysis(ctd2Dataframe, ctd2ReadCounts, "pearson", T, "ctd2")
 
-runCorrelationAnalysis(prismDataframe, prismlogCPM, "spearman", T, "PRISM")
-runCorrelationAnalysis(sangerDataframe, sangerlogCPM, "spearman", T, "sangerGDSC")
-runCorrelationAnalysis(ctd2Dataframe, ctd2logCPM, "spearman", T, "ctd2")
+runCorrelationAnalysis(prismDataframe, prismReadCounts, "spearman", T, "PRISM")
+runCorrelationAnalysis(sangerDataframe, sangerReadCounts, "spearman", T, "sangerGDSC")
+runCorrelationAnalysis(ctd2Dataframe, ctd2ReadCounts, "spearman", T, "ctd2")
 
-runCorrelationAnalysis(prismDataframe, prismlogCPM, "spearman", F, "PRISM")
-runCorrelationAnalysis(sangerDataframe, sangerlogCPM, "spearman", F, "sangerGDSC")
-runCorrelationAnalysis(ctd2Dataframe, ctd2logCPM, "spearman", F, "ctd2")
+runCorrelationAnalysis(prismDataframe, prismReadCounts, "spearman", F, "PRISM")
+runCorrelationAnalysis(sangerDataframe, sangerReadCounts, "spearman", F, "sangerGDSC")
+runCorrelationAnalysis(ctd2Dataframe, ctd2ReadCounts, "spearman", F, "ctd2")
 
 ###### Example Plots ########
-GeneName <- "FNDC11"
-AlkylatingAgentName <- "Altretamine"
-AlkylatingAgentNum <- as.numeric(which(colnames(prismDataframe) == sprintf("%s SensitivityAUC", toupper(AlkylatingAgentName))))
-AUC <- subset(prismDataframe,select = c(1,AlkylatingAgentNum)) 
+GeneName <- "GREM1"
+AlkylatingAgentName <- "Ifosfamide"
+Dataframe <- ctd2Dataframe
+DatabaseName <- "ctd2"
+ReadCounts <- ctd2ReadCounts
+
+AlkylatingAgentNum <- as.numeric(which(colnames(Dataframe) == sprintf("%s SensitivityAUC", toupper(AlkylatingAgentName))))
+AUC <- subset(Dataframe,select = c(1,AlkylatingAgentNum)) 
 AUC <- na.omit(AUC)
 AUC <- AUC[order(AUC$celllines),]
 
-logCPM <- subset(prismlogCPM, rownames(prismlogCPM) %in%  AUC$celllines)
-logCPM <- prismlogCPM[order(rownames(prismlogCPM)),]
+logCPM <- subset(ReadCounts, rownames(ReadCounts) %in%  AUC$celllines)
+logCPM <- logCPM [order(rownames(logCPM)),]
+logCPM <- filterLowCountsCPM(logCPM, 0.3)
 
+#corPlot <- data.frame("AUC" = AUC[,2], "GALNT4" = logCPM[,GeneName[1]], "TX1" = logCPM[,GeneName[2]])
 corPlot <- data.frame("AUC" = AUC[,2], "logCPM" = logCPM[,GeneName])
-
+equation <- corPlot$logCPM ~ corPlot$AUC
 
 #Need adjusted p-value and Limma data
-limmaResults <- fread(sprintf('/Volumes/xchip_beroukhimlab/Isobel/CancerResistance/datasets/Limma Voom Analysis/PRISM/Table for %s DEG Analysis.csv', toupper(AlkylatingAgentName)))
-spearmanResults <- fread(sprintf('/Volumes/xchip_beroukhimlab/Isobel/CancerResistance/datasets/Spearman (Exact) Correlation Analysis/PRISM/Table for %s Spearman (Exact) Correlation Analysis.csv', toupper(AlkylatingAgentName))) 
+limmaResults <- fread(sprintf('/Volumes/xchip_beroukhimlab/Isobel/CancerResistance/datasets/Limma Voom Analysis/%s/Table for %s DEG Analysis.csv', DatabaseName, toupper(AlkylatingAgentName)))
+spearmanResults <- fread(sprintf('/Volumes/xchip_beroukhimlab/Isobel/CancerResistance/datasets/Spearman (Exact) Correlation Analysis/%s/Table for %s Spearman (Exact) Correlation Analysis.csv', DatabaseName, toupper(AlkylatingAgentName))) 
+DESeqResults <- fread(sprintf('/Volumes/xchip_beroukhimlab/Isobel/CancerResistance/datasets/DESeq Analysis/%s/Table for %s DEG Analysis.csv', DatabaseName, toupper(AlkylatingAgentName))) 
+EdgeRResults <- fread(sprintf('/Volumes/xchip_beroukhimlab/Isobel/CancerResistance/datasets/EdgeR Analysis/%s/Table for %s DEG Analysis.csv', DatabaseName, toupper(AlkylatingAgentName))) 
 
 RvalueLabel <- sprintf("R = %s",round(spearmanResults$Rvalue[spearmanResults$Gene == GeneName],2))
-cpmFDRLabel <- sprintf("p = %s",round(spearmanResults$FDR[spearmanResults$Gene == GeneName],2))
-limmaFDRLabel <- sprintf("p = %s",round(limmaResults$adj.P.Val[limmaResults$Gene == GeneName],3))
-logFCLabel <- sprintf("logFC = %s",round(limmaResults$logFC[limmaResults$Gene == GeneName],2))
+cpmFDRLabel <- sprintf("p = %s",round(spearmanResults$FDR[spearmanResults$Gene == GeneName],3))
+limmalogFCLabel <- sprintf("Limma logFC = %s",round(limmaResults$logFC[limmaResults$Gene == GeneName],2))
+limmaFDRLabel <- sprintf("p = %s",round(limmaResults$adj.P.Val[limmaResults$Gene == GeneName],6))
+DESeqlogFCLabel  <- sprintf("DESeq logFC = %s",round(DESeqResults$logFC[DESeqResults$Gene == GeneName],2))
+DESeqFDRLabel <- sprintf("p = %s",round(DESeqResults$FDR[DESeqResults$Gene == GeneName],14))
+EdgeRlogFCLabel  <- sprintf("EdgeR logFC = %s",round(EdgeRResults$logFC[EdgeRResults$Gene == GeneName],2))
+EdgeRFDRLabel <- sprintf("p = %s",round(EdgeRResults$FDR[EdgeRResults$Gene == GeneName],13))
 
 #May need to adjust (x,y) of coordinates per graph
 annotations <- data.frame(
-  xpos = c(-Inf,-Inf,-Inf,-Inf),
-  ypos =  c(Inf,Inf,Inf,Inf),
-  annotateText = c(RvalueLabel, cpmFDRLabel, logFCLabel, limmaFDRLabel),
-  hjustvar = c(-0.20,-0.36,-0.15,-0.21) ,
-  vjustvar = c(2,3.8, 7, 8.8)) 
+  xpos = c(-Inf,-Inf,-Inf,-Inf,-Inf,-Inf, -Inf,-Inf),
+  ypos =  c(Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf),
+  annotateText = c(RvalueLabel, cpmFDRLabel, limmalogFCLabel, limmaFDRLabel,DESeqlogFCLabel,DESeqFDRLabel,EdgeRlogFCLabel,EdgeRFDRLabel),
+  hjustvar = c(-0.19,-0.36,-0.09,-0.20, -0.09, -0.20,-0.09, -0.20) ,
+  vjustvar = c(3,4.8, 8, 9.8, 13, 14.8, 18, 19.8)) 
+
 logCPMplot <- 
   ggplot(data = corPlot, aes(x = AUC, y = logCPM)) + geom_point() + 
   geom_text(data=annotations,aes(x=xpos,y=ypos,hjust=hjustvar,vjust=vjustvar,label=annotateText, parse = TRUE)) +
+  #geom_smooth(method = "lm", se=F) +
+  #stat_regline_equation(label.y = 1.5, aes(label = ..eq.label..)) + 
   theme 
 print(logCPMplot +
         ggtitle(sprintf("%s Sensitivity and %s Gene Expression Correlation", AlkylatingAgentName, GeneName))+
         labs(y=sprintf("%s Expression (logCPM)", GeneName), x = sprintf("%s (AUC)", AlkylatingAgentName)))
 
-
+cor(corPlot$AUC,corPlot$logCPM, method = "pearson")
+cor.test(corPlot$AUC,corPlot$logCPM, method = "spearman", Exact = F)
 ########### DESeq2 Analysis #############
 
 filterLowCountsDESeq <- function(ReadCounts, ThresholdValue)
@@ -567,42 +609,48 @@ filterLowCountsDESeq <- function(ReadCounts, ThresholdValue)
   keep <- rowSums(threshold) >= nrow(ReadCounts)/4
   transposedCounts <- transposedCounts[keep,]
   
-  # dgList <- DGEList(counts=transposedCounts) 
-  # normFactors <- calcNormFactors(dgList)
-  
-  return (transposedCounts) #More easily aligns with AUC data
+  return (transposedCounts) 
   
 }
-
-prismReadCounts <-  filterLowCountsDESeq(prismReadCounts, 0.3)
-sangerReadCounts <- filterLowCountsDESeq(sangerReadCounts, 0.2)
-ctd2ReadCounts <-  filterLowCountsDESeq(ctd2ReadCounts, 0.2)
 
 RunDESeqAnalysis <- function(ReadCounts, DesignMatrix, DatabaseName)
 {
   
   for(row in SensitivityStartIndex:ncol(DesignMatrix))
   {
-    ReducedDesignMatrix <- na.omit(prismDesignMatrix[,c(1,2), drop = FALSE])
+    # row <- 6
+    # ReadCounts <- prismReadCounts
+    # DesignMatrix <- prismDesignMatrix
     
-    AlkylatingAgentName <- unlist(strsplit(colnames(ReducedDesignMatrix)[-1], " "))
-    AlkylatingAgentName <- AlkylatingAgentName[!AlkylatingAgentName %in% "SensitivityAUC"]
+    ReducedDesignMatrix <- na.omit(DesignMatrix[,c(1,row), drop = FALSE])
+    
+    AlkylatingAgentName <- unlist(strsplit(colnames(ReducedDesignMatrix), " "))
+    AlkylatingAgentName <- AlkylatingAgentName[!AlkylatingAgentName %in% c("(Intercept)","SensitivityAUC")]
     
     colnames(ReducedDesignMatrix)[-1] <- "AUC"
-    ReducedReadCounts <- prismReadCounts[,which(colnames(prismReadCounts) %in%  rownames(ReducedDesignMatrix))]
-    
+    ReducedReadCounts <- ReadCounts[which(rownames(ReadCounts) %in%  rownames(ReducedDesignMatrix)),]
+    #ReducedReadCounts <- t(ReducedReadCounts)
+    ReducedReadCounts <- filterLowCountsDESeq(ReducedReadCounts, 0.2) #duplicate genes only show up in this? ReducedReadCounts <- t(ReducedReadCounts)
+
     #Model corrects for library size
     DESeqModel <- DESeqDataSetFromMatrix(countData = round(ReducedReadCounts),
                                          colData = ReducedDesignMatrix,
                                          design = ~AUC) 
     
+    # DESeqModel <- estimateSizeFactors(DESeqModel)
+    # nc <- counts(DESeqModel, normalized=TRUE)
+    # filter <- rowSums(nc >= 10) >= 2
+    # DESeqModel <- DESeqModel[filter,]
+
+
     DESeqObject <- DESeq(DESeqModel)
     
     #How many adjusted p-values are less than 0.05
     #sum(DESeqResults$padj < 0.05, na.rm=TRUE) #101
     
     #DESeqResults <- results(DESeqObject, alpha=0.05, lfcThreshold = 1)
-    DESeqResults <- lfcShrink(DESeqObject, coef=2, type = "apeglm")#results(DESeqObject)
+    DESeqResults <- results(DESeqObject, name = "AUC")
+    #DESeqResults <- lfcShrink(DESeqObject, coef=2, type = "apeglm")#results(DESeqObject)
     #DESeqResults <- results(DESeqObject)
     #summary(DESeqResults)
     #sum(DESeqResults$padj < 0.05, na.rm=TRUE) 
@@ -646,6 +694,78 @@ RunDESeqAnalysis(prismReadCounts, prismDesignMatrix, "PRISM")
 RunDESeqAnalysis(sangerReadCounts, sangerDesignMatrix, "sangerGDSC")
 RunDESeqAnalysis(ctd2ReadCounts, ctd2DesignMatrix, "ctd2")
 
+###### EdgeR ########
 
+runEdgeRAnalysis <- function(DesignMatrix, ReadCounts, DatabaseName)
+{
+  All_DEG <- c()
+  
+  for(row in SensitivityStartIndex:ncol(DesignMatrix))
+  {
+    # row <- 6
+    # DesignMatrix <- prismDesignMatrix
+    # ReadCounts <- prismReadCounts
+    
+    ReducedDesignMatrix <- na.omit(DesignMatrix[,c(1,row), drop = FALSE])
+    ReducedReadCounts <- ReadCounts[which(rownames(ReadCounts) %in%  rownames(ReducedDesignMatrix)),]
+    
+    ReduceddgList <- DGEList(counts=t(ReducedReadCounts))
+    #ReduceddgList <- filterLowCountsLimma(ReduceddgList, ReducedReadCounts, 0.2)
+    
+    #Filtering + Normalization 
+    CPM <- cpm(ReduceddgList)
+    countCheck <- CPM > 1 
+    keep <- which(rowSums(countCheck) >= 2) 
+    ReduceddgList <- ReduceddgList[keep,]
+    ReduceddgList <- calcNormFactors(ReduceddgList, method="TMM")
+    
+    ReduceddgList <- estimateDisp( ReduceddgList, design = ReducedDesignMatrix, robust = TRUE)
+    #ReduceddgList <- estimateDisp( ReduceddgList, design = ReducedDesignMatrix[,-1])
+    
+    fit <- glmFit(ReduceddgList , ReducedDesignMatrix) 
+    lrt <- glmLRT(fit, 2) 
+    DEGresults <- topTags(lrt, n=Inf) # DEGresults <- topTags(lrt, n=Inf, p.value=.001)
+    All_DEG <- c(All_DEG,list(DEGresults$table))
+    
+    AlkylatingAgentName <- unlist(strsplit(colnames(ReducedDesignMatrix), " "))
+    AlkylatingAgentName <-AlkylatingAgentName[!AlkylatingAgentName %in% c("(Intercept)", "SensitivityAUC")]
+    
+    #Volcano Plot
+    lrt$table$FDR <- p.adjust(lrt$table$PValue,method="BH")
+    lrt$table$diffexpressed <- "No difference"
+    lrt$table$diffexpressed[lrt$table$logFC > 1 & lrt$table$FDR < 0.05] <- "Down for resistant"
+    lrt$table$diffexpressed[lrt$table$logFC < -1 & lrt$table$FDR < 0.05] <- "Up for resistant"
+    #View(lrt$table[lrt$table$diffexpressed != "No difference",])
+    
+    mycolors <- c("blue", "red", "black")
+    names(mycolors) <- c("Down for resistant", "Up for resistant", "No difference")
+    
+    lrt$table <- lrt$table[order(lrt$table$FDR),]
+    lrt$table$Gene <- rownames(lrt$table)
+    rownames(lrt$table) <- seq(1:nrow(lrt$table))
+    MostSignificantGenes <- lrt$table[lrt$table$diffexpressed != "No difference",]
+    MostSignificantGenes <- top_n(MostSignificantGenes, -10, FDR) #Only label most significant
+
+    ggplot(data=lrt$table, mapping = aes(x=logFC, y=-log10(PValue), col=diffexpressed)) +
+      geom_point() +
+      theme +
+      geom_text_repel(data = MostSignificantGenes, aes(label = Gene), size = 3,
+                      max.overlaps=Inf,
+                      show.legend  = F) +
+      scale_colour_manual(values = mycolors) +
+      labs(title=sprintf("Differentially Expressed Genes For %s",AlkylatingAgentName ))
+    
+    filename <- paste0(sprintf("Differentially Expressed Genes For %s",AlkylatingAgentName))
+    ggsave(file = paste0(sprintf('%s/Isobel/CancerResistance/figures/EdgeR Analysis/%s/%s.pdf', directory, DatabaseName, filename)))
+    
+    title <- paste0(sprintf("Table for %s",AlkylatingAgentName)," DEG Analysis")
+    write.csv(lrt$table, sprintf('%s/Isobel/CancerResistance/datasets/EdgeR Analysis/%s/%s.csv', directory, DatabaseName, title), row.names = FALSE)
+    
+   }
+}
+
+runEdgeRAnalysis(prismDesignMatrix, prismReadCounts, "PRISM")
+runEdgeRAnalysis(sangerDesignMatrix, sangerReadCounts, "sangerGDSC")
+runEdgeRAnalysis(ctd2DesignMatrix, ctd2ReadCounts, "ctd2")
 
 
